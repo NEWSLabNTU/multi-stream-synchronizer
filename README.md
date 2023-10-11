@@ -1,4 +1,5 @@
-# Multi-Channel Time Synchronizer
+# Multi-Stream Synchronizer
 
 This library implements the time synchronization algorithm that groups
-up messages from multiple sources within a time window.
+up messages from multiple streams within a time window, where messages
+within each group come from distinct streams.
