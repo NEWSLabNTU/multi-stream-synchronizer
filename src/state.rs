@@ -1,29 +1,42 @@
-use super::{buffer::Buffer, Timestamped};
-use crate::msg::{DevicePath, MatcherFeedback};
+use crate::types::{Feedback, Key, Timestamped};
 use indexmap::IndexMap;
 use std::{
     cmp::Ordering::*,
+    collections::VecDeque,
     ops::{
         Bound::{self, *},
         RangeBounds,
     },
     time::Duration,
 };
-use tokio::sync::watch;
 
-pub struct State<T>
+/// The internal state maintained by [sync](crate::sync).
+pub struct State<K, T>
 where
+    K: Key,
     T: Timestamped,
 {
-    pub feedback_tx: Option<watch::Sender<MatcherFeedback>>,
-    pub buffers: IndexMap<DevicePath, Buffer<T>>,
+    /// A list of buffers indexed by K.
+    pub buffers: IndexMap<K, Buffer<T>>,
+
+    /// Marks the timestamp where messages before the point are
+    /// batched and emitted.
     pub commit_ts: Option<Duration>,
+
+    /// The maximum size of each buffer for each key.
     pub buf_size: usize,
+
+    /// The windows size that a batch of messages should reside
+    /// within.
     pub window_size: Duration,
+
+    /// The sender where feedback messages are sent to.
+    pub feedback_tx: Option<flume::Sender<Feedback<K>>>,
 }
 
-impl<T> State<T>
+impl<K, T> State<K, T>
 where
+    K: Key,
     T: Timestamped,
 {
     // pub fn print_debug_info(&self) {
@@ -33,20 +46,18 @@ where
     //     });
     // }
 
+    /// Generate a feedback message.
     pub fn update_feedback(&mut self) {
         let Some(feedback_tx) = &self.feedback_tx else {
             return;
         };
 
-        let accepted_devices: Vec<&DevicePath> = self
+        let accepted_keys: Vec<K> = self
             .buffers
             .iter()
-            .filter(|&(_device, buffer)| (buffer.buffer.len() < self.buf_size))
-            .map(|(device, _buffer)| device)
+            .filter(|&(_key, buffer)| (buffer.buffer.len() < self.buf_size))
+            .map(|(key, _buffer)| *key)
             .collect();
-
-        let accepted_devices_protos: Vec<DevicePath> =
-            accepted_devices.iter().cloned().cloned().collect();
 
         // Request input sources to deliver messages with ts below thresh_ts
         // let thresh_ts = self
@@ -56,12 +67,11 @@ where
         //     .min();
         // let include_thresh_ts = self.buffers.values().all(|buffer| buffer.buffer.is_empty());
 
-        let msg = MatcherFeedback {
-            accepted_devices: accepted_devices_protos,
+        let msg = Feedback {
+            accepted_keys,
             // accepted_max_timestamp: thresh_ts.map(|ts| ts.as_nanos() as u64),
             // inclusive: Some(include_thresh_ts),
             accepted_max_timestamp: None,
-            inclusive: None,
             commit_timestamp: self.commit_ts,
         };
 
@@ -77,7 +87,8 @@ where
         }
     }
 
-    pub fn try_match(&mut self) -> Option<IndexMap<DevicePath, T>> {
+    /// Try to group up messages within a time window.
+    pub fn try_match(&mut self) -> Option<IndexMap<K, T>> {
         type DurationBound = (Bound<Duration>, Bound<Duration>);
 
         // make sure (sup - inf >= window_size)
@@ -103,7 +114,7 @@ where
         let items: IndexMap<_, _> = self
             .buffers
             .iter_mut()
-            .flat_map(|(device, buffer)| -> Option<_> {
+            .flat_map(|(key, buffer)| -> Option<_> {
                 // find the first candidate that is within the window
                 let mut candidate = loop {
                     let front = buffer.buffer.pop_front()?;
@@ -138,7 +149,7 @@ where
                     }
                 }
 
-                Some((*device, candidate))
+                Some((*key, candidate))
             })
             .collect();
 
@@ -149,6 +160,7 @@ where
         Some(items)
     }
 
+    /// Gets the minimum of the maximum timestamps from each buffer.
     pub fn sup_timestamp(&self) -> Option<Duration> {
         self.buffers
             .values()
@@ -162,6 +174,7 @@ where
             .flatten()
     }
 
+    /// Gets the maximum of the minimum timestamps from each buffer.
     pub fn inf_timestamp(&self) -> Option<Duration> {
         self.buffers
             .values()
@@ -175,6 +188,7 @@ where
             .flatten()
     }
 
+    /// Gets the minimum timestamp among all messages.
     pub fn min_timestamp(&self) -> Option<Duration> {
         self.buffers
             .values()
@@ -188,22 +202,25 @@ where
             .flatten()
     }
 
-    /// Checks if every device buffer size reaches the limit.
+    /// Checks if every buffer size reaches the limit.
     pub fn is_full(&self) -> bool {
         self.buffers
             .values()
             .all(|buffer| buffer.buffer.len() >= self.buf_size)
     }
 
-    /// Checks if every device buffer receives at least two messages.
+    /// Checks if every buffer receives at least two messages.
     pub fn is_ready(&self) -> bool {
         self.buffers.values().all(|buffer| buffer.buffer.len() >= 2)
     }
 
+    /// Checks if all buffers are empty.
     pub fn is_empty(&self) -> bool {
         self.buffers.values().all(|buffer| buffer.buffer.is_empty())
     }
 
+    /// Remove the message with the minimum timestamp among all
+    /// buffers. Returns true if a message is dropped.
     pub fn drop_min(&mut self) -> bool {
         let Some(min_timestamp) = self.min_timestamp() else {
             return false;
@@ -220,7 +237,9 @@ where
         true
     }
 
-    pub fn push(&mut self, device: &DevicePath, item: T) -> bool {
+    /// Insert a message to the queue identified by the key. It
+    /// returns true if the message is successfully inserted.
+    pub fn push(&mut self, key: K, item: T) -> bool {
         let timestamp = item.timestamp();
 
         match self.commit_ts {
@@ -228,11 +247,54 @@ where
             _ => {}
         }
 
-        let Some(buffer) = self.buffers.get_mut(device) else {
+        let Some(buffer) = self.buffers.get_mut(&key) else {
             return false;
         };
 
         buffer.try_push(item)
+    }
+}
+
+pub struct Buffer<T>
+where
+    T: Timestamped,
+{
+    pub buffer: VecDeque<T>,
+    pub last_ts: Option<Duration>,
+}
+
+impl<T> Buffer<T>
+where
+    T: Timestamped,
+{
+    // pub fn front_ts(&self) -> Option<Duration> {
+    //     self.buffer
+    //         .front()
+    //         .map(|item| item.timestamp())
+    //         .or(self.last_ts)
+    // }
+
+    // pub fn last_ts(&self) -> Option<Duration> {
+    //     self.last_ts
+    // }
+
+    /// Try to push a message into the buffer.
+    ///
+    /// If the timestamp on the message is below that of the
+    /// previously inserted message, the message is dropped and the
+    /// method returns false. Otherwise, it stores and message and
+    /// returns true.
+    pub fn try_push(&mut self, item: T) -> bool {
+        let timestamp = item.timestamp();
+
+        match self.last_ts {
+            Some(last_ts) if last_ts >= timestamp => return false,
+            _ => {}
+        }
+
+        self.last_ts = Some(timestamp);
+        self.buffer.push_back(item);
+        true
     }
 }
 

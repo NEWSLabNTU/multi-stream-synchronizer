@@ -1,230 +1,213 @@
-mod buffer;
-mod state;
-
-use self::{buffer::Buffer, state::State};
-use crate::msg::{DevicePath, MatcherFeedback};
+use crate::{
+    state::{Buffer, State},
+    types::{FeedbackStream, Key, OutputStream, Timestamped},
+    Config,
+};
 use anyhow::{ensure, Result};
 use futures::{
     self,
-    stream::{Stream, TryStreamExt as _},
+    stream::{self, Stream},
+    StreamExt,
 };
-use indexmap::{IndexMap, IndexSet};
-use log::{debug, warn};
-use pin_project::pin_project;
+use indexmap::IndexMap;
 use std::{
     collections::VecDeque,
     pin::Pin,
     task::{Context, Poll, Poll::*},
     time::Duration,
 };
-use tokio::sync::watch;
+use tracing::warn;
 
-pub trait Timestamped {
-    fn timestamp(&self) -> Duration;
-}
-
-pub fn sync<S, T>(
-    input_stream: S,
-    complete_matching: bool,
-    window_size: Duration,
-    start_time: Option<Duration>,
-    buf_size: usize,
-    devices: IndexSet<DevicePath>,
-) -> Result<(
-    impl Stream<Item = Result<IndexMap<DevicePath, T>>> + Send,
-    watch::Receiver<MatcherFeedback>,
-)>
+/// Consume a stream of messages, each identified by a key, and group
+/// up messages within a time window with distinct keys.
+///
+/// The function returns an output stream and a feedback stream. The
+/// output stream emits batches of grouped messages. The feedback
+/// stream emits feedback messages to control the input stream.
+pub fn sync<'a, K, T, S, I>(
+    stream: S,
+    keys: I,
+    config: Config,
+) -> Result<(OutputStream<'a, K, T>, FeedbackStream<'a, K>)>
 where
-    S: 'static + Stream<Item = Result<(DevicePath, T)>> + Unpin + Send,
-    T: 'static + Timestamped + Send,
+    K: Key + 'a,
+    T: Timestamped + 'a,
+    S: Stream<Item = Result<(K, T)>> + Unpin + Send + 'a,
+    I: IntoIterator<Item = K>,
 {
-    let num_devices = devices.len();
+    // let keys: Vec<_> = keys.into_iter().collect();
 
-    let config = SynchronizerConfig {
+    let Config {
         window_size,
         start_time,
         buf_size,
-        devices,
+    } = config;
+
+    // Sanity check
+    ensure!(buf_size >= 2);
+    ensure!(window_size > Duration::ZERO);
+
+    // Initialize buffers for respective keys.
+    let buffers: IndexMap<_, _> = keys
+        .into_iter()
+        .map(|key| {
+            let buffer = Buffer {
+                buffer: VecDeque::with_capacity(buf_size),
+                last_ts: None,
+            };
+
+            (key, buffer)
+        })
+        .collect();
+    ensure!(!buffers.is_empty());
+
+    // Create the queue that pipes generated feedback messages.
+    let (feedback_tx, feedback_rx) = flume::unbounded();
+
+    // Initialize the internal state.
+    let mut state = State {
+        feedback_tx: Some(feedback_tx),
+        buffers,
+        commit_ts: start_time,
+        buf_size,
+        window_size,
     };
-    let (stream, feedback_rx) = Synchronizer::new(input_stream, config)?;
-    let stream = stream.try_filter(move |matching| {
-        let ok = !complete_matching || matching.len() == num_devices;
-        if !ok {
-            debug!("drop a matching due to incomplete matching");
-        }
-        async move { ok }
-    });
 
-    Ok((stream, feedback_rx))
+    // Construct output stream.
+    let output_stream = {
+        let mut stream = Some(stream);
+        stream::poll_fn(move |ctx| poll(Pin::new(&mut stream), &mut state, ctx))
+    };
+
+    Ok((output_stream.boxed(), feedback_rx.into_stream().boxed()))
 }
 
-#[derive(Debug, Clone)]
-struct SynchronizerConfig {
-    pub window_size: Duration,
-    pub start_time: Option<Duration>,
-    pub buf_size: usize,
-    pub devices: IndexSet<DevicePath>,
-}
-
-#[pin_project]
-struct Synchronizer<S, T>
+/// The polling function is repeated called to generated batched
+/// messages.
+fn poll<K, T, S>(
+    mut input_stream: Pin<&mut Option<S>>,
+    state: &mut State<K, T>,
+    ctx: &mut Context<'_>,
+) -> Poll<Option<Result<IndexMap<K, T>>>>
 where
-    S: Stream<Item = Result<(DevicePath, T)>>,
-    T: Timestamped,
+    K: Key,
+    S: Stream<Item = Result<(K, T)>> + Unpin + Send,
+    T: Timestamped + Send,
 {
-    #[pin]
-    stream: Option<S>,
-    state: State<T>,
-}
+    let group = if let Some(mut input_stream_mut) = input_stream.as_mut().as_pin_mut() {
+        // Case: the input stream is not depleted yet.
 
-impl<S, T> Synchronizer<S, T>
-where
-    S: Stream<Item = Result<(DevicePath, T)>>,
-    T: Timestamped,
-{
-    pub fn new(
-        stream: S,
-        config: SynchronizerConfig,
-    ) -> Result<(Self, watch::Receiver<MatcherFeedback>)> {
-        let SynchronizerConfig {
-            window_size,
-            start_time,
-            buf_size,
-            devices,
-        } = config;
+        // Loop until a valid group is found.
+        loop {
+            if !state.is_ready() {
+                // Case: Any one of the buffer has one or zero
+                // message.
 
-        ensure!(buf_size >= 2);
-        ensure!(window_size > Duration::ZERO);
-        ensure!(!devices.is_empty());
+                // Consume one message from the input stream.
+                let item = input_stream_mut.as_mut().poll_next(ctx);
 
-        let buffers = devices
-            .iter()
-            .cloned()
-            .map(|device| {
-                let buffer = Buffer {
-                    buffer: VecDeque::with_capacity(buf_size),
-                    last_ts: None,
+                let (key, item) = match item {
+                    Ready(Some(Ok(item))) => item, // A message is returned
+                    Ready(Some(Err(err))) => {
+                        // An error is returned
+                        input_stream.set(None);
+                        break Some(Err(err));
+                    }
+                    Ready(None) => {
+                        // The input stream is depleted.
+                        input_stream.set(None);
+                        break None;
+                    }
+                    Pending => {
+                        // The input stream is not ready.
+                        return Pending;
+                    }
                 };
 
-                (device, buffer)
-            })
-            .collect();
-        let (feedback_tx, feedback_rx) = watch::channel(MatcherFeedback {
-            accepted_max_timestamp: None,
-            commit_timestamp: None,
-            inclusive: None,
-            accepted_devices: devices.iter().cloned().collect(),
-        });
+                // Try to insert the message.
+                let yes = state.push(key, item);
+                state.update_feedback();
 
-        let state = State {
-            feedback_tx: Some(feedback_tx),
-            buffers,
-            commit_ts: start_time,
-            buf_size,
-            window_size,
-        };
-
-        let me = Self {
-            stream: Some(stream),
-            state,
-        };
-
-        Ok((me, feedback_rx))
-    }
-}
-
-impl<S, T> Stream for Synchronizer<S, T>
-where
-    S: Stream<Item = Result<(DevicePath, T)>>,
-    T: Timestamped,
-{
-    type Item = Result<IndexMap<DevicePath, T>>;
-
-    fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut me = self.project();
-        let state = &mut me.state;
-
-        Ready(if let Some(mut stream) = me.stream.as_mut().as_pin_mut() {
-            loop {
-                if !state.is_ready() {
-                    // the any is device
-                    let item = stream.as_mut().poll_next(ctx);
-
-                    let (device, item) = match item {
-                        Ready(Some(Ok(item))) => item,
-                        Ready(Some(Err(err))) => {
-                            me.stream.set(None);
-                            break Some(Err(err));
-                        }
-                        Ready(None) => {
-                            me.stream.set(None);
-                            break None;
-                        }
-                        Pending => {
-                            return Pending;
-                        }
-                    };
-
-                    if !state.push(&device, item) {
-                        debug!("drop a late message for device {:?}", device);
-                        state.update_feedback(); // tell upstream to catch up
-                        continue;
-                    }
-                    state.update_feedback();
-                } else if state.is_full() {
-                    if let Some(matching) = state.try_match() {
-                        state.update_feedback();
-                        break Some(Ok(matching));
-                    } else {
-                        warn!(
-                            "Unable to find a new matching while all buffers are full.\
-                             Drop one message anyway."
-                        );
-                        state.drop_min();
-                        state.update_feedback();
-                    }
-                } else {
-                    let item = stream.as_mut().poll_next(ctx);
-
-                    let (device, item) = match item {
-                        Ready(Some(Ok(item))) => item,
-                        Ready(Some(Err(err))) => {
-                            me.stream.set(None);
-                            break Some(Err(err));
-                        }
-                        Ready(None) => {
-                            me.stream.set(None);
-                            break None;
-                        }
-                        Pending => {
-                            return Pending;
-                        }
-                    };
-
-                    if !state.push(&device, item) {
-                        debug!("drop a late message for device {:?}", device);
-                        state.update_feedback(); // tell upstream to catch up
-                        continue;
-                    }
-
-                    if let Some(matching) = state.try_match() {
-                        state.update_feedback();
-                        break Some(Ok(matching));
-                    } else {
-                        state.update_feedback();
-                    }
+                // If failed, tell the input stream to catch up and
+                // retry.
+                if !yes {
+                    // debug!("drop a late message for device {:?}", device);
+                    continue;
                 }
-            }
-        } else {
-            loop {
-                if state.is_empty() {
-                    break None;
-                } else if let Some(matching) = state.try_match() {
+            } else if state.is_full() {
+                // Case: All buffers are full.
+
+                // Try to group up messages. If successful, return the
+                // group. Otherwise, drop the message with minimum
+                // timestamp and retry.
+                if let Some(matching) = state.try_match() {
+                    state.update_feedback();
                     break Some(Ok(matching));
                 } else {
+                    warn!(
+                        "Unable to find a new matching while all buffers are full.\
+                             Drop one message anyway."
+                    );
                     state.drop_min();
+                    state.update_feedback();
+                }
+            } else {
+                // Case: All buffers have at least 2 messages and not
+                // all buffers are full.
+
+                // Consume a message from the input stream.
+                let item = input_stream_mut.as_mut().poll_next(ctx);
+
+                let (key, item) = match item {
+                    Ready(Some(Ok(item))) => item,
+                    Ready(Some(Err(err))) => {
+                        input_stream.set(None);
+                        break Some(Err(err));
+                    }
+                    Ready(None) => {
+                        input_stream.set(None);
+                        break None;
+                    }
+                    Pending => {
+                        return Pending;
+                    }
+                };
+
+                // Try to insert the message to one of the buffer.  If
+                // not successful, emit a feedback to tell the input
+                // stream to catch up.
+                if !state.push(key, item) {
+                    // debug!("drop a late message for device {:?}", device);
+                    state.update_feedback();
+                    continue;
+                }
+
+                // Try to group up messages.
+                let matching = state.try_match();
+
+                // Emit a feedback.
+                state.update_feedback();
+
+                // Emit the group if a group is successfully formed.
+                if let Some(matching) = matching {
+                    break Some(Ok(matching));
                 }
             }
-        })
-    }
+        }
+    } else {
+        // Case: the input stream is depleted.
+
+        // Loop until a valid group is found.
+        loop {
+            if state.is_empty() {
+                break None;
+            } else if let Some(matching) = state.try_match() {
+                break Some(Ok(matching));
+            } else {
+                state.drop_min();
+            }
+        }
+    };
+
+    Ready(group)
 }
