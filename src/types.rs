@@ -13,7 +13,7 @@ pub trait Key: Clone + Copy + PartialEq + Eq + Hash + Sync + Send {}
 
 impl<K> Key for K where K: Clone + Copy + PartialEq + Eq + Hash + Sync + Send {}
 
-/// The feedback message generated from [sync](crate::sync) to control
+/// The feedback message generated from [sync](crate::sync()) to control
 /// the pace of input streams.
 #[derive(Debug, Clone)]
 pub struct Feedback<K>
@@ -25,10 +25,10 @@ where
     pub accepted_keys: Vec<K>,
 }
 
-/// The stream is returned by [sync](crate::sync), emitting batches of
+/// The stream is returned by [sync](crate::sync()), emitting batches of
 /// messages within a time window.
 pub type OutputStream<'a, K, T> = BoxStream<'a, Result<IndexMap<K, T>>>;
 
-/// The stream is returned by [sync](crate::sync) to control the pace
+/// The stream is returned by [sync](crate::sync()) to control the pace
 /// of input stream.
 pub type FeedbackStream<'a, K> = BoxStream<'a, Feedback<K>>;
