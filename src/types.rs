@@ -2,6 +2,7 @@ use anyhow::Result;
 use futures::stream::BoxStream;
 use indexmap::IndexMap;
 use std::{hash::Hash, time::Duration};
+use tokio::sync::watch;
 
 /// Creates a timestamp from the message passed to the synchronizer.
 pub trait Timestamped: Send {
@@ -31,4 +32,4 @@ pub type OutputStream<'a, K, T> = BoxStream<'a, Result<IndexMap<K, T>>>;
 
 /// The stream is returned by [sync](crate::sync()) to control the pace
 /// of input stream.
-pub type FeedbackStream<'a, K> = BoxStream<'a, Feedback<K>>;
+pub type FeedbackReceiver<K> = watch::Receiver<Feedback<K>>;

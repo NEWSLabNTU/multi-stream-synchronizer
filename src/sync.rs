@@ -1,7 +1,7 @@
 use crate::{
     state::{Buffer, State},
-    types::{FeedbackStream, Key, OutputStream, Timestamped},
-    Config,
+    types::{FeedbackReceiver, Key, OutputStream, Timestamped},
+    Config, Feedback,
 };
 use anyhow::{ensure, Result};
 use futures::{
@@ -16,6 +16,7 @@ use std::{
     task::{Context, Poll, Poll::*},
     time::Duration,
 };
+use tokio::sync::watch;
 use tracing::warn;
 
 /// Consume a stream of messages, each identified by a key, and group
@@ -28,7 +29,7 @@ pub fn sync<'a, K, T, S, I>(
     stream: S,
     keys: I,
     config: Config,
-) -> Result<(OutputStream<'a, K, T>, FeedbackStream<'a, K>)>
+) -> Result<(OutputStream<'a, K, T>, FeedbackReceiver<K>)>
 where
     K: Key + 'a,
     T: Timestamped + 'a,
@@ -62,7 +63,14 @@ where
     ensure!(!buffers.is_empty());
 
     // Create the queue that pipes generated feedback messages.
-    let (feedback_tx, feedback_rx) = flume::unbounded();
+    let (feedback_tx, feedback_rx) = {
+        let init_feedback = Feedback {
+            accepted_max_timestamp: None,
+            commit_timestamp: None,
+            accepted_keys: buffers.keys().cloned().collect(),
+        };
+        watch::channel(init_feedback)
+    };
 
     // Initialize the internal state.
     let mut state = State {
@@ -79,7 +87,7 @@ where
         stream::poll_fn(move |ctx| poll(Pin::new(&mut stream), &mut state, ctx))
     };
 
-    Ok((output_stream.boxed(), feedback_rx.into_stream().boxed()))
+    Ok((output_stream.boxed(), feedback_rx))
 }
 
 /// The polling function is repeated called to generated batched

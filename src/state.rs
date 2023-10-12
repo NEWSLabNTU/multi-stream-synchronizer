@@ -9,6 +9,7 @@ use std::{
     },
     time::Duration,
 };
+use tokio::sync::watch;
 
 /// The internal state maintained by [sync](crate::sync).
 pub struct State<K, T>
@@ -31,7 +32,7 @@ where
     pub window_size: Duration,
 
     /// The sender where feedback messages are sent to.
-    pub feedback_tx: Option<flume::Sender<Feedback<K>>>,
+    pub feedback_tx: Option<watch::Sender<Feedback<K>>>,
 }
 
 impl<K, T> State<K, T>
