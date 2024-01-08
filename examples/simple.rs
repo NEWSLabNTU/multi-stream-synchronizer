@@ -18,17 +18,18 @@ impl WithTimestamp for MyMessage {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let x_seq = &[1001, 1999, 3000];
+    let y_seq = &[998, 2003, 3002];
+
+    macro_rules! make_stream {
+        ($seq:expr) => {{
+            stream::iter($seq.iter().map(|&ts| MyMessage(Duration::from_millis(ts))))
+        }};
+    }
+
     // Create two message streams
-    let stream_x = stream::iter([
-        MyMessage(Duration::from_millis(1001)),
-        MyMessage(Duration::from_millis(1999)),
-        MyMessage(Duration::from_millis(3000)),
-    ]);
-    let stream_y = stream::iter([
-        MyMessage(Duration::from_millis(998)),
-        MyMessage(Duration::from_millis(2003)),
-        MyMessage(Duration::from_millis(3002)),
-    ]);
+    let stream_x = make_stream!(x_seq);
+    let stream_y = make_stream!(y_seq);
 
     // Join two streams into one, where each message is identified by
     // key.
@@ -48,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Collect the groups
     let groups: Vec<IndexMap<&str, MyMessage>> = sync_stream.try_collect().await?;
+    println!("{groups:#?}");
 
     Ok(())
 }
