@@ -1,6 +1,7 @@
 use crate::{
-    state::{Buffer, State},
-    types::{FeedbackReceiver, Key, OutputStream, Timestamped},
+    buffer::Buffer,
+    state::State,
+    types::{FeedbackReceiver, Key, OutputStream, WithTimestamp},
     Config, Feedback,
 };
 use anyhow::{ensure, Result};
@@ -11,13 +12,12 @@ use futures::{
 };
 use indexmap::IndexMap;
 use std::{
-    collections::VecDeque,
     pin::Pin,
     task::{Context, Poll, Poll::*},
     time::Duration,
 };
 use tokio::sync::watch;
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Consume a stream of messages, each identified by a key, and group
 /// up messages within a time window with distinct keys.
@@ -32,7 +32,7 @@ pub fn sync<'a, K, T, S, I>(
 ) -> Result<(OutputStream<'a, K, T>, FeedbackReceiver<K>)>
 where
     K: Key + 'a,
-    T: Timestamped + 'a,
+    T: WithTimestamp + 'a,
     S: Stream<Item = Result<(K, T)>> + Unpin + Send + 'a,
     I: IntoIterator<Item = K>,
 {
@@ -52,11 +52,7 @@ where
     let buffers: IndexMap<_, _> = keys
         .into_iter()
         .map(|key| {
-            let buffer = Buffer {
-                buffer: VecDeque::with_capacity(buf_size),
-                last_ts: None,
-            };
-
+            let buffer = Buffer::with_capacity(buf_size);
             (key, buffer)
         })
         .collect();
@@ -100,7 +96,7 @@ fn poll<K, T, S>(
 where
     K: Key,
     S: Stream<Item = Result<(K, T)>> + Unpin + Send,
-    T: Timestamped + Send,
+    T: WithTimestamp + Send,
 {
     let group = if let Some(mut input_stream_mut) = input_stream.as_mut().as_pin_mut() {
         // Case: the input stream is not depleted yet.
@@ -108,6 +104,7 @@ where
         // Loop until a valid group is found.
         loop {
             if !state.is_ready() {
+                // eprintln!("not ready");
                 // Case: Any one of the buffer has one or zero
                 // message.
 
@@ -133,16 +130,16 @@ where
                 };
 
                 // Try to insert the message.
-                let yes = state.push(key, item);
+                let ok = state.push(key, item).is_ok();
                 state.update_feedback();
 
                 // If failed, tell the input stream to catch up and
                 // retry.
-                if !yes {
-                    // debug!("drop a late message for device {:?}", device);
-                    continue;
+                if !ok {
+                    debug!("drop a late message");
                 }
             } else if state.is_full() {
+                // eprintln!("full");
                 // Case: All buffers are full.
 
                 // Try to group up messages. If successful, return the
@@ -154,12 +151,13 @@ where
                 } else {
                     warn!(
                         "Unable to find a new matching while all buffers are full.\
-                             Drop one message anyway."
+                         Drop one message anyway."
                     );
                     state.drop_min();
                     state.update_feedback();
                 }
             } else {
+                // eprintln!("ready");
                 // Case: All buffers have at least 2 messages and not
                 // all buffers are full.
 
@@ -184,7 +182,7 @@ where
                 // Try to insert the message to one of the buffer.  If
                 // not successful, emit a feedback to tell the input
                 // stream to catch up.
-                if !state.push(key, item) {
+                if state.push(key, item).is_err() {
                     // debug!("drop a late message for device {:?}", device);
                     state.update_feedback();
                     continue;
@@ -203,8 +201,8 @@ where
             }
         }
     } else {
+        // eprintln!("depleted");
         // Case: the input stream is depleted.
-
         // Loop until a valid group is found.
         loop {
             if state.is_empty() {

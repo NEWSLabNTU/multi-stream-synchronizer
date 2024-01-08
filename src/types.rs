@@ -5,7 +5,7 @@ use std::{hash::Hash, time::Duration};
 use tokio::sync::watch;
 
 /// Creates a timestamp from the message passed to the synchronizer.
-pub trait Timestamped: Send {
+pub trait WithTimestamp: Send {
     fn timestamp(&self) -> Duration;
 }
 

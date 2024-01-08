@@ -1,27 +1,22 @@
-use crate::types::{Feedback, Key, Timestamped};
-use indexmap::IndexMap;
-use std::{
-    cmp::Ordering::*,
-    collections::VecDeque,
-    ops::{
-        Bound::{self, *},
-        RangeBounds,
-    },
-    time::Duration,
+use crate::{
+    buffer::Buffer,
+    types::{Feedback, Key, WithTimestamp},
 };
+use indexmap::IndexMap;
+use std::time::Duration;
 use tokio::sync::watch;
 
 /// The internal state maintained by [sync](crate::sync).
 pub struct State<K, T>
 where
     K: Key,
-    T: Timestamped,
+    T: WithTimestamp,
 {
-    /// A list of buffers indexed by K.
+    /// A list of buffers indexed by key K.
     pub buffers: IndexMap<K, Buffer<T>>,
 
-    /// Marks the timestamp where messages before the point are
-    /// batched and emitted.
+    /// Marks the timestamp where messages before the time point are
+    /// emitted.
     pub commit_ts: Option<Duration>,
 
     /// The maximum size of each buffer for each key.
@@ -38,7 +33,7 @@ where
 impl<K, T> State<K, T>
 where
     K: Key,
-    T: Timestamped,
+    T: WithTimestamp,
 {
     // pub fn print_debug_info(&self) {
     //     debug!("buffer sizes");
@@ -56,7 +51,7 @@ where
         let accepted_keys: Vec<K> = self
             .buffers
             .iter()
-            .filter(|&(_key, buffer)| (buffer.buffer.len() < self.buf_size))
+            .filter(|&(_key, buffer)| (buffer.len() < self.buf_size))
             .map(|(key, _buffer)| *key)
             .collect();
 
@@ -90,67 +85,40 @@ where
 
     /// Try to group up messages within a time window.
     pub fn try_match(&mut self) -> Option<IndexMap<K, T>> {
-        type DurationBound = (Bound<Duration>, Bound<Duration>);
+        let inf_ts = loop {
+            let (_, inf_ts) = self.inf_timestamp()?;
 
-        // make sure (sup - inf >= window_size)
-        let (inf, _sup) = match (self.inf_timestamp(), self.sup_timestamp()) {
-            (Some(inf), Some(sup)) if inf + self.window_size <= sup => (inf, sup),
-            _ => return None,
+            // Make sure (sup - inf >= window_size). If not, it needs to
+            // wait for more messages.
+            let (_, sup_ts) = self.sup_timestamp()?;
+            if inf_ts + self.window_size > sup_ts {
+                return None;
+            }
+
+            let window_start = inf_ts.saturating_sub(self.window_size);
+
+            // Drop messages before the time window.
+            let dropped = self.buffers.values_mut().any(|buffer| {
+                let count = buffer.drop_before(window_start);
+                count > 0
+            });
+
+            if !dropped {
+                break inf_ts;
+            }
         };
-        let window_start = inf.saturating_sub(self.window_size);
-        let window_end = inf.saturating_add(self.window_size);
 
-        // drop_range is the range below start of window and commit timestamp
-        let drop_range: DurationBound = {
-            let upper = match self.commit_ts {
-                Some(commit_ts) if commit_ts > window_start => Included(commit_ts),
-                _ => Excluded(window_start),
-            };
-            (Unbounded, upper)
-        };
-
-        // untouched range is the range above the end of window timestamp
-        let untouched_range: DurationBound = (Excluded(window_end), Unbounded);
+        // let window_start = inf_ts.saturating_sub(self.window_size);
+        let window_end = inf_ts.saturating_add(self.window_size);
 
         let items: IndexMap<_, _> = self
             .buffers
             .iter_mut()
-            .flat_map(|(key, buffer)| -> Option<_> {
+            .map(|(key, buffer)| {
                 // find the first candidate that is within the window
-                let mut candidate = loop {
-                    let front = buffer.buffer.pop_front()?;
-                    let curr_ts = front.timestamp();
-
-                    if drop_range.contains(&curr_ts) {
-                        continue;
-                    } else if untouched_range.contains(&curr_ts) {
-                        return None;
-                    } else {
-                        break front;
-                    }
-                };
-
-                // find a better candidate with minimum time difference to inf timestamp
-                let mut curr_diff = duration_diff(inf, candidate.timestamp());
-
-                loop {
-                    let front = buffer.buffer.front()?;
-                    let new_ts = front.timestamp();
-
-                    if untouched_range.contains(&new_ts) {
-                        break;
-                    }
-                    let new_diff = duration_diff(inf, new_ts);
-
-                    if curr_diff > new_diff {
-                        candidate = buffer.buffer.pop_front().unwrap();
-                        curr_diff = new_diff;
-                    } else {
-                        break;
-                    }
-                }
-
-                Some((*key, candidate))
+                let item = buffer.pop_front().unwrap();
+                assert!(item.timestamp() <= window_end);
+                (*key, item)
             })
             .collect();
 
@@ -162,75 +130,69 @@ where
     }
 
     /// Gets the minimum of the maximum timestamps from each buffer.
-    pub fn sup_timestamp(&self) -> Option<Duration> {
+    pub fn sup_timestamp(&self) -> Option<(K, Duration)> {
         self.buffers
-            .values()
-            .map(|buffer| buffer.buffer.back().map(|item| item.timestamp()))
-            .min_by(|lhs, rhs| match (lhs, rhs) {
-                (Some(lhs), Some(rhs)) => lhs.cmp(rhs),
-                (Some(_), None) => Greater,
-                (None, Some(_)) => Less,
-                (None, None) => Equal,
+            .iter()
+            .filter_map(|(key, buffer)| {
+                // Get the latest timestamp
+                let ts = buffer.back()?.timestamp();
+                Some((*key, ts))
             })
-            .flatten()
+            .min_by_key(|(_, ts)| *ts)
     }
 
     /// Gets the maximum of the minimum timestamps from each buffer.
-    pub fn inf_timestamp(&self) -> Option<Duration> {
+    pub fn inf_timestamp(&self) -> Option<(K, Duration)> {
         self.buffers
-            .values()
-            .map(|buffer| buffer.buffer.front().map(|item| item.timestamp()))
-            .min_by(|lhs, rhs| match (lhs, rhs) {
-                (Some(lhs), Some(rhs)) => lhs.cmp(rhs).reverse(),
-                (Some(_), None) => Greater,
-                (None, Some(_)) => Less,
-                (None, None) => Equal,
+            .iter()
+            .filter_map(|(key, buffer)| {
+                // Get the earliest timestamp
+                let ts = buffer.front()?.timestamp();
+                Some((*key, ts))
             })
-            .flatten()
+            .max_by_key(|(_, ts)| *ts)
     }
 
     /// Gets the minimum timestamp among all messages.
-    pub fn min_timestamp(&self) -> Option<Duration> {
+    pub fn min_timestamp(&self) -> Option<(K, Duration)> {
         self.buffers
-            .values()
-            .map(|buffer| buffer.buffer.front().map(|item| item.timestamp()))
-            .min_by(|lhs, rhs| match (lhs, rhs) {
-                (Some(lhs), Some(rhs)) => lhs.cmp(rhs),
-                (Some(_), None) => Greater,
-                (None, Some(_)) => Less,
-                (None, None) => Equal,
+            .iter()
+            .filter_map(|(key, buffer)| {
+                // Get the earliest timestamp
+                let ts = buffer.front()?.timestamp();
+                Some((*key, ts))
             })
-            .flatten()
+            .min_by_key(|(_, ts)| *ts)
     }
 
     /// Checks if every buffer size reaches the limit.
     pub fn is_full(&self) -> bool {
         self.buffers
             .values()
-            .all(|buffer| buffer.buffer.len() >= self.buf_size)
+            .all(|buffer| buffer.len() >= self.buf_size)
     }
 
     /// Checks if every buffer receives at least two messages.
     pub fn is_ready(&self) -> bool {
-        self.buffers.values().all(|buffer| buffer.buffer.len() >= 2)
+        self.buffers.values().all(|buffer| buffer.len() >= 2)
     }
 
     /// Checks if all buffers are empty.
     pub fn is_empty(&self) -> bool {
-        self.buffers.values().all(|buffer| buffer.buffer.is_empty())
+        self.buffers.values().all(|buffer| buffer.is_empty())
     }
 
     /// Remove the message with the minimum timestamp among all
     /// buffers. Returns true if a message is dropped.
     pub fn drop_min(&mut self) -> bool {
-        let Some(min_timestamp) = self.min_timestamp() else {
+        let Some((_, min_ts)) = self.min_timestamp() else {
             return false;
         };
 
         self.buffers.values_mut().for_each(|buffer| {
-            if let Some(front) = buffer.buffer.front() {
-                if front.timestamp() == min_timestamp {
-                    buffer.buffer.pop_front();
+            if let Some(front) = buffer.front() {
+                if front.timestamp() == min_ts {
+                    buffer.pop_front();
                 }
             }
         });
@@ -240,69 +202,18 @@ where
 
     /// Insert a message to the queue identified by the key. It
     /// returns true if the message is successfully inserted.
-    pub fn push(&mut self, key: K, item: T) -> bool {
+    pub fn push(&mut self, key: K, item: T) -> Result<(), T> {
         let timestamp = item.timestamp();
 
         match self.commit_ts {
-            Some(commit_ts) if commit_ts >= timestamp => return false,
+            Some(commit_ts) if commit_ts >= timestamp => return Err(item),
             _ => {}
         }
 
         let Some(buffer) = self.buffers.get_mut(&key) else {
-            return false;
+            return Err(item);
         };
 
         buffer.try_push(item)
-    }
-}
-
-pub struct Buffer<T>
-where
-    T: Timestamped,
-{
-    pub buffer: VecDeque<T>,
-    pub last_ts: Option<Duration>,
-}
-
-impl<T> Buffer<T>
-where
-    T: Timestamped,
-{
-    // pub fn front_ts(&self) -> Option<Duration> {
-    //     self.buffer
-    //         .front()
-    //         .map(|item| item.timestamp())
-    //         .or(self.last_ts)
-    // }
-
-    // pub fn last_ts(&self) -> Option<Duration> {
-    //     self.last_ts
-    // }
-
-    /// Try to push a message into the buffer.
-    ///
-    /// If the timestamp on the message is below that of the
-    /// previously inserted message, the message is dropped and the
-    /// method returns false. Otherwise, it stores and message and
-    /// returns true.
-    pub fn try_push(&mut self, item: T) -> bool {
-        let timestamp = item.timestamp();
-
-        match self.last_ts {
-            Some(last_ts) if last_ts >= timestamp => return false,
-            _ => {}
-        }
-
-        self.last_ts = Some(timestamp);
-        self.buffer.push_back(item);
-        true
-    }
-}
-
-fn duration_diff(lhs: Duration, rhs: Duration) -> Duration {
-    if lhs >= rhs {
-        lhs - rhs
-    } else {
-        rhs - lhs
     }
 }

@@ -57,6 +57,7 @@
 //! # }
 //! ```
 
+mod buffer;
 mod config;
 mod state;
 mod sync;

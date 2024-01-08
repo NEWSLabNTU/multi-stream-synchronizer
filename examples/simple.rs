@@ -3,13 +3,14 @@ use futures::{
     stream::{StreamExt, TryStreamExt},
 };
 use indexmap::IndexMap;
-use multi_stream_synchronizer::{sync, Config, Timestamped};
+use multi_stream_synchronizer::{sync, Config, WithTimestamp};
 use std::time::Duration;
 
 // Define your message type
+#[derive(Debug)]
 struct MyMessage(Duration);
 
-impl Timestamped for MyMessage {
+impl WithTimestamp for MyMessage {
     fn timestamp(&self) -> Duration {
         self.0
     }
