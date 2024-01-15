@@ -138,8 +138,10 @@ where
                                 break Some(Ok(matching));
                             } else{
                                 // println!("there are still datas, but matching has failed");
-                                input_stream.set(None);
-                                break None;
+                                // input_stream.set(None);
+                                // break None;
+                                state.drop_min();
+                                continue;
                             }
                         } else {
                             input_stream.set(None);
@@ -208,8 +210,10 @@ where
                             input_stream.set(None);
                             break Some(Ok(matching));
                         } else{
-                            input_stream.set(None);
-                            break None;
+                            state.drop_min();
+                            continue;
+                            // input_stream.set(None);
+                            // break None;
                         }
                     }
                     Pending => {
