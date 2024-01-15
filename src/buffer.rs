@@ -3,6 +3,7 @@ use std::{collections::VecDeque, time::Duration};
 
 /// A buffer to store a sequence of messages with monotonically
 /// increasing timestamps.
+#[derive (Debug)]
 pub struct Buffer<T>
 where
     T: WithTimestamp,

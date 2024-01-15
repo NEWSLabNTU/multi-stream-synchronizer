@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 /// The internal state maintained by [sync](crate::sync).
+#[derive (Debug)]
 pub struct State<K, T>
 where
     K: Key,
@@ -88,12 +89,16 @@ where
         let inf_ts = loop {
             let (_, inf_ts) = self.inf_timestamp()?;
 
+            // Checking all buffers have only one data left.
             // Make sure (sup - inf >= window_size). If not, it needs to
             // wait for more messages.
             let (_, sup_ts) = self.sup_timestamp()?;
-            if inf_ts + self.window_size > sup_ts {
-                return None;
+            if !self.all_one(){
+                if inf_ts + self.window_size > sup_ts {
+                    return None;
+                }
             }
+            
 
             let window_start = inf_ts.saturating_sub(self.window_size);
 
@@ -182,6 +187,10 @@ where
         self.buffers.values().all(|buffer| buffer.is_empty())
     }
 
+    /// Checks if all buffers have only one data left.
+    pub fn all_one(&self) -> bool {
+        self.buffers.values().all(|buffer| buffer.len() == 1)
+    }
     /// Remove the message with the minimum timestamp among all
     /// buffers. Returns true if a message is dropped.
     pub fn drop_min(&mut self) -> bool {

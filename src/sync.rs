@@ -31,9 +31,9 @@ pub fn sync<'a, K, T, S, I>(
     config: Config,
 ) -> Result<(OutputStream<'a, K, T>, FeedbackReceiver<K>)>
 where
-    K: Key + 'a,
-    T: WithTimestamp + 'a,
-    S: Stream<Item = Result<(K, T)>> + Unpin + Send + 'a,
+    K: Key + 'a + std::fmt::Debug,
+    T: WithTimestamp + 'a + std::fmt::Debug,
+    S: Stream<Item = Result<(K, T)>> + Unpin + Send + std::fmt::Debug + 'a,
     I: IntoIterator<Item = K>,
 {
     // let keys: Vec<_> = keys.into_iter().collect();
@@ -94,9 +94,9 @@ fn poll<K, T, S>(
     ctx: &mut Context<'_>,
 ) -> Poll<Option<Result<IndexMap<K, T>>>>
 where
-    K: Key,
-    S: Stream<Item = Result<(K, T)>> + Unpin + Send,
-    T: WithTimestamp + Send,
+    K: Key + std::fmt::Debug,
+    S: Stream<Item = Result<(K, T)>> + Unpin + Send + std::fmt::Debug,
+    T: WithTimestamp + Send + std::fmt::Debug,
 {
     let group = if let Some(mut input_stream_mut) = input_stream.as_mut().as_pin_mut() {
         // Case: the input stream is not depleted yet.
@@ -104,15 +104,21 @@ where
         // Loop until a valid group is found.
         loop {
             if !state.is_ready() {
-                // eprintln!("not ready");
+                eprintln!("not ready");
                 // Case: Any one of the buffer has one or zero
                 // message.
 
                 // Consume one message from the input stream.
                 let item = input_stream_mut.as_mut().poll_next(ctx);
-
-                let (key, item) = match item {
-                    Ready(Some(Ok(item))) => item, // A message is returned
+                // println!("............\n{:#?}\n",state);
+                match item {
+                    Ready(Some(Ok(item))) => {
+                        let (key,item) = item;
+                        let ok = state.push(key, item).is_ok();
+                        if !ok {
+                            debug!("drop a late message")
+                        }
+                    } // A message is returned
                     Ready(Some(Err(err))) => {
                         // An error is returned
                         input_stream.set(None);
@@ -120,26 +126,43 @@ where
                     }
                     Ready(None) => {
                         // The input stream is depleted.
-                        input_stream.set(None);
-                        break None;
+                        // input_stream.set(None);
+                        // break None;
+                        // println!("........\n{:#?}\n........",state);
+                        if !state.is_empty(){
+                            // println!("checking the buffers still have datas");
+                            if let Some(matching) = state.try_match(){
+                                state.update_feedback();
+                                // println!("when input stream is depeleted and there are still matching");
+                                input_stream.set(None);
+                                break Some(Ok(matching));
+                            } else{
+                                // println!("there are still datas, but matching has failed");
+                                input_stream.set(None);
+                                break None;
+                            }
+                        } else {
+                            input_stream.set(None);
+                            break None;
+                        }
                     }
                     Pending => {
                         // The input stream is not ready.
                         return Pending;
                     }
                 };
-
+                
                 // Try to insert the message.
-                let ok = state.push(key, item).is_ok();
-                state.update_feedback();
+                // let ok = state.push(key, item).is_ok();
+                // state.update_feedback();
 
                 // If failed, tell the input stream to catch up and
                 // retry.
-                if !ok {
-                    debug!("drop a late message");
-                }
+                // if !ok {
+                //     debug!("drop a late message");
+                // }
             } else if state.is_full() {
-                // eprintln!("full");
+                eprintln!("full");
                 // Case: All buffers are full.
 
                 // Try to group up messages. If successful, return the
@@ -157,22 +180,37 @@ where
                     state.update_feedback();
                 }
             } else {
-                // eprintln!("ready");
+                eprintln!("ready");
                 // Case: All buffers have at least 2 messages and not
                 // all buffers are full.
 
                 // Consume a message from the input stream.
                 let item = input_stream_mut.as_mut().poll_next(ctx);
 
-                let (key, item) = match item {
-                    Ready(Some(Ok(item))) => item,
+                match item {
+                    Ready(Some(Ok(item))) => {
+                        let (_key,_item) = item;
+                        if state.push(_key,_item).is_err() {
+                            state.update_feedback();
+                            continue;
+                        }
+                    }
                     Ready(Some(Err(err))) => {
                         input_stream.set(None);
                         break Some(Err(err));
                     }
                     Ready(None) => {
-                        input_stream.set(None);
-                        break None;
+                        // println!("input stream has been depleted.............");
+                        // input_stream.set(None);
+                        // break None; // TODO
+                        if let Some(matching) = state.try_match(){
+                            state.update_feedback();
+                            input_stream.set(None);
+                            break Some(Ok(matching));
+                        } else{
+                            input_stream.set(None);
+                            break None;
+                        }
                     }
                     Pending => {
                         return Pending;
@@ -182,11 +220,11 @@ where
                 // Try to insert the message to one of the buffer.  If
                 // not successful, emit a feedback to tell the input
                 // stream to catch up.
-                if state.push(key, item).is_err() {
-                    // debug!("drop a late message for device {:?}", device);
-                    state.update_feedback();
-                    continue;
-                }
+                // if state.push(key, item).is_err() {
+                //     // debug!("drop a late message for device {:?}", device);
+                //     state.update_feedback();
+                //     continue;
+                // }
 
                 // Try to group up messages.
                 let matching = state.try_match();
@@ -201,7 +239,7 @@ where
             }
         }
     } else {
-        // eprintln!("depleted");
+        eprintln!("depleted");
         // Case: the input stream is depleted.
         // Loop until a valid group is found.
         loop {
@@ -210,6 +248,7 @@ where
             } else if let Some(matching) = state.try_match() {
                 break Some(Ok(matching));
             } else {
+                println!("......\n{state:#?}\n......");
                 state.drop_min();
             }
         }
