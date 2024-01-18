@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
         start_time: None,
         buf_size: 16,
     };
-    let (sync_stream, feedback_stream) = sync(join_stream, ["X", "Y"], config)?;
+    let (sync_stream, _feedback_stream) = sync(join_stream, ["X", "Y"], config)?;
 
     // Collect the groups
     let groups: Vec<IndexMap<&str, MyMessage>> = sync_stream.try_collect().await?;

@@ -53,7 +53,7 @@ where
             .buffers
             .iter()
             .filter(|&(_key, buffer)| (buffer.len() < self.buf_size))
-            .map(|(key, _buffer)| *key)
+            .map(|(key, _buffer)| key.clone())
             .collect();
 
         // Request input sources to deliver messages with ts below thresh_ts
@@ -123,7 +123,7 @@ where
                 // find the first candidate that is within the window
                 let item = buffer.pop_front().unwrap();
                 assert!(item.timestamp() <= window_end);
-                (*key, item)
+                (key.clone(), item)
             })
             .collect();
 
@@ -141,7 +141,7 @@ where
             .filter_map(|(key, buffer)| {
                 // Get the latest timestamp
                 let ts = buffer.back()?.timestamp();
-                Some((*key, ts))
+                Some((key.clone(), ts))
             })
             .min_by_key(|(_, ts)| *ts)
     }
@@ -153,7 +153,7 @@ where
             .filter_map(|(key, buffer)| {
                 // Get the earliest timestamp
                 let ts = buffer.front()?.timestamp();
-                Some((*key, ts))
+                Some((key.clone(), ts))
             })
             .max_by_key(|(_, ts)| *ts)
     }
@@ -165,7 +165,7 @@ where
             .filter_map(|(key, buffer)| {
                 // Get the earliest timestamp
                 let ts = buffer.front()?.timestamp();
-                Some((*key, ts))
+                Some((key.clone(), ts))
             })
             .min_by_key(|(_, ts)| *ts)
     }
@@ -182,9 +182,20 @@ where
         self.buffers.values().all(|buffer| buffer.len() >= 2)
     }
 
-    /// Checks if all buffers are empty.
+    /// Checks if there are buffers which are empty.
     pub fn is_empty(&self) -> bool {
-        self.buffers.values().all(|buffer| buffer.is_empty())
+        // self.buffers.values().all(|buffer| buffer.is_empty())
+        let buffers = self.buffers.iter();
+        for item in buffers{
+            let (_key, buffer) = item;
+            if buffer.is_empty(){
+                return true;
+            } else{
+                continue;
+            }
+        }
+        false
+        
     }
 
     /// Checks if all buffers have only one data left.

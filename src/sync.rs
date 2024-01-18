@@ -57,6 +57,7 @@ where
         })
         .collect();
     ensure!(!buffers.is_empty());
+    // println!("the buffer is shown as below \n {buffers:#?}");
 
     // Create the queue that pipes generated feedback messages.
     let (feedback_tx, feedback_rx) = {
@@ -100,11 +101,12 @@ where
 {
     let group = if let Some(mut input_stream_mut) = input_stream.as_mut().as_pin_mut() {
         // Case: the input stream is not depleted yet.
-
+        // println!("......\n{state:#?}\n......");
         // Loop until a valid group is found.
         loop {
+            // println!("......\n{state:#?}\n......");
             if !state.is_ready() {
-                eprintln!("not ready");
+                // eprintln!("not ready");
                 // Case: Any one of the buffer has one or zero
                 // message.
 
@@ -164,7 +166,7 @@ where
                 //     debug!("drop a late message");
                 // }
             } else if state.is_full() {
-                eprintln!("full");
+                // eprintln!("full");
                 // Case: All buffers are full.
 
                 // Try to group up messages. If successful, return the
@@ -182,7 +184,7 @@ where
                     state.update_feedback();
                 }
             } else {
-                eprintln!("ready");
+                // eprintln!("ready");
                 // Case: All buffers have at least 2 messages and not
                 // all buffers are full.
 
@@ -243,7 +245,7 @@ where
             }
         }
     } else {
-        eprintln!("depleted");
+        // eprintln!("depleted");
         // Case: the input stream is depleted.
         // Loop until a valid group is found.
         loop {
@@ -252,7 +254,7 @@ where
             } else if let Some(matching) = state.try_match() {
                 break Some(Ok(matching));
             } else {
-                println!("......\n{state:#?}\n......");
+                // println!("......\n{state:#?}\n......");
                 state.drop_min();
             }
         }
