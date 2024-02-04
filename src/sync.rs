@@ -115,7 +115,7 @@ where
                 // println!("............\n{:#?}\n",state);
                 match item {
                     Ready(Some(Ok(item))) => {
-                        let (key,item) = item;
+                        let (key, item) = item;
                         let ok = state.push(key, item).is_ok();
                         if !ok {
                             debug!("drop a late message")
@@ -131,14 +131,14 @@ where
                         // input_stream.set(None);
                         // break None;
                         // println!("........\n{:#?}\n........",state);
-                        if !state.is_empty(){
+                        if !state.is_empty() {
                             // println!("checking the buffers still have datas");
-                            if let Some(matching) = state.try_match(){
+                            if let Some(matching) = state.try_match() {
                                 state.update_feedback();
                                 // println!("when input stream is depeleted and there are still matching");
                                 input_stream.set(None);
                                 break Some(Ok(matching));
-                            } else{
+                            } else {
                                 // println!("there are still datas, but matching has failed");
                                 // input_stream.set(None);
                                 // break None;
@@ -155,7 +155,7 @@ where
                         return Pending;
                     }
                 };
-                
+
                 // Try to insert the message.
                 // let ok = state.push(key, item).is_ok();
                 // state.update_feedback();
@@ -193,8 +193,8 @@ where
 
                 match item {
                     Ready(Some(Ok(item))) => {
-                        let (_key,_item) = item;
-                        if state.push(_key,_item).is_err() {
+                        let (_key, _item) = item;
+                        if state.push(_key, _item).is_err() {
                             state.update_feedback();
                             continue;
                         }
@@ -207,11 +207,11 @@ where
                         // println!("input stream has been depleted.............");
                         // input_stream.set(None);
                         // break None; // TODO
-                        if let Some(matching) = state.try_match(){
+                        if let Some(matching) = state.try_match() {
                             state.update_feedback();
                             input_stream.set(None);
                             break Some(Ok(matching));
-                        } else{
+                        } else {
                             state.drop_min();
                             continue;
                             // input_stream.set(None);

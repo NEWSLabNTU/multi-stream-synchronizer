@@ -12,7 +12,7 @@ pub trait WithTimestamp: Send {
 /// The key that identifies the queue in the synchronizer.
 pub trait Key: Clone + PartialEq + Eq + Hash + Sync + Send {}
 
-impl<K> Key for K where K: Clone  + PartialEq + Eq + Hash + Sync + Send {}
+impl<K> Key for K where K: Clone + PartialEq + Eq + Hash + Sync + Send {}
 
 /// The feedback message generated from [sync](crate::sync()) to control
 /// the pace of input streams.

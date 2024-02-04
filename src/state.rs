@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 /// The internal state maintained by [sync](crate::sync).
-#[derive (Debug)]
+#[derive(Debug)]
 pub struct State<K, T>
 where
     K: Key,
@@ -93,12 +93,11 @@ where
             // Make sure (sup - inf >= window_size). If not, it needs to
             // wait for more messages.
             let (_, sup_ts) = self.sup_timestamp()?;
-            if !self.all_one(){
+            if !self.all_one() {
                 if inf_ts + self.window_size > sup_ts {
                     return None;
                 }
             }
-            
 
             let window_start = inf_ts.saturating_sub(self.window_size);
 
@@ -186,16 +185,15 @@ where
     pub fn is_empty(&self) -> bool {
         // self.buffers.values().all(|buffer| buffer.is_empty())
         let buffers = self.buffers.iter();
-        for item in buffers{
+        for item in buffers {
             let (_key, buffer) = item;
-            if buffer.is_empty(){
+            if buffer.is_empty() {
                 return true;
-            } else{
+            } else {
                 continue;
             }
         }
         false
-        
     }
 
     /// Checks if all buffers have only one data left.
