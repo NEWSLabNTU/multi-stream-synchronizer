@@ -31,9 +31,9 @@ pub fn sync<'a, K, T, S, I>(
     config: Config,
 ) -> Result<(OutputStream<'a, K, T>, FeedbackReceiver<K>)>
 where
-    K: Key + 'a + std::fmt::Debug,
-    T: WithTimestamp + 'a + std::fmt::Debug,
-    S: Stream<Item = Result<(K, T)>> + Unpin + Send + std::fmt::Debug + 'a,
+    K: Key + 'a,
+    T: WithTimestamp + 'a,
+    S: Stream<Item = Result<(K, T)>> + Unpin + Send + 'a,
     I: IntoIterator<Item = K>,
 {
     // let keys: Vec<_> = keys.into_iter().collect();
@@ -95,9 +95,9 @@ fn poll<K, T, S>(
     ctx: &mut Context<'_>,
 ) -> Poll<Option<Result<IndexMap<K, T>>>>
 where
-    K: Key + std::fmt::Debug,
-    S: Stream<Item = Result<(K, T)>> + Unpin + Send + std::fmt::Debug,
-    T: WithTimestamp + Send + std::fmt::Debug,
+    K: Key,
+    S: Stream<Item = Result<(K, T)>> + Unpin + Send,
+    T: WithTimestamp + Send,
 {
     let group = if let Some(mut input_stream_mut) = input_stream.as_mut().as_pin_mut() {
         // Case: the input stream is not depleted yet.
