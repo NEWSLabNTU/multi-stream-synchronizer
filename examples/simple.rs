@@ -17,7 +17,7 @@ impl WithTimestamp for MyMessage {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> eyre::Result<()> {
     let x_seq = &[1001, 1999, 3000];
     let y_seq = &[998, 2003, 3002];
 
@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         stream_x.map(|msg| ("X", msg)),
         stream_y.map(|msg| ("Y", msg)),
     )
-    .map(anyhow::Ok);
+    .map(eyre::Ok);
 
     // Run the synchronization algorithm
     let config = Config {

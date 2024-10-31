@@ -22,7 +22,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> anyhow::Result<()> {
+//! # async fn main() -> eyre::Result<()> {
 //! // Create two message streams
 //! let stream_x = stream::iter([
 //!     MyMessage(Duration::from_millis(1001)),
@@ -41,7 +41,7 @@
 //!     stream_x.map(|msg| ("X", msg)),
 //!     stream_y.map(|msg| ("Y", msg)),
 //! )
-//! .map(|msg| anyhow::Ok(msg));
+//! .map(|msg| eyre::Ok(msg));
 //!
 //! // Run the synchronization algorithm
 //! let config = Config {

@@ -4,7 +4,7 @@ use crate::{
     types::{FeedbackReceiver, Key, OutputStream, WithTimestamp},
     Config, Feedback,
 };
-use anyhow::{ensure, Result};
+use eyre::{ensure, Result};
 use futures::{
     self,
     stream::{self, Stream},

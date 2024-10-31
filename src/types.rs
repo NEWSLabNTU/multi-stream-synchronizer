@@ -1,4 +1,4 @@
-use anyhow::Result;
+use eyre::Result;
 use futures::stream::BoxStream;
 use indexmap::IndexMap;
 use std::{hash::Hash, time::Duration};
