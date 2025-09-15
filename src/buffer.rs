@@ -180,3 +180,210 @@ where
 //         }
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestMessage {
+        timestamp: Duration,
+        data: String,
+    }
+
+    impl TestMessage {
+        fn new(timestamp_ms: u64, data: &str) -> Self {
+            Self {
+                timestamp: Duration::from_millis(timestamp_ms),
+                data: data.to_string(),
+            }
+        }
+    }
+
+    impl WithTimestamp for TestMessage {
+        fn timestamp(&self) -> Duration {
+            self.timestamp
+        }
+    }
+
+    fn create_message(timestamp_ms: u64) -> TestMessage {
+        TestMessage::new(timestamp_ms, &format!("msg_{}", timestamp_ms))
+    }
+
+    fn create_messages(timestamps_ms: &[u64]) -> Vec<TestMessage> {
+        timestamps_ms.iter().map(|&ts| create_message(ts)).collect()
+    }
+
+    #[test]
+    fn test_buffer_with_capacity() {
+        let buffer: Buffer<TestMessage> = Buffer::with_capacity(5);
+        assert_eq!(buffer.len(), 0);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_buffer_len_and_is_empty() {
+        let mut buffer = Buffer::with_capacity(3);
+
+        assert_eq!(buffer.len(), 0);
+        assert!(buffer.is_empty());
+
+        let msg1 = create_message(1000);
+        buffer.try_push(msg1).unwrap();
+
+        assert_eq!(buffer.len(), 1);
+        assert!(!buffer.is_empty());
+
+        let msg2 = create_message(2000);
+        buffer.try_push(msg2).unwrap();
+
+        assert_eq!(buffer.len(), 2);
+        assert!(!buffer.is_empty());
+    }
+
+    #[test]
+    fn test_buffer_front_and_back() {
+        let mut buffer = Buffer::with_capacity(3);
+
+        assert!(buffer.front().is_none());
+        assert!(buffer.back().is_none());
+
+        let msg1 = create_message(1000);
+        let msg2 = create_message(2000);
+        let msg3 = create_message(3000);
+
+        buffer.try_push(msg1.clone()).unwrap();
+        assert_eq!(
+            buffer.front().unwrap().timestamp(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            buffer.back().unwrap().timestamp(),
+            Duration::from_millis(1000)
+        );
+
+        buffer.try_push(msg2.clone()).unwrap();
+        assert_eq!(
+            buffer.front().unwrap().timestamp(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            buffer.back().unwrap().timestamp(),
+            Duration::from_millis(2000)
+        );
+
+        buffer.try_push(msg3.clone()).unwrap();
+        assert_eq!(
+            buffer.front().unwrap().timestamp(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            buffer.back().unwrap().timestamp(),
+            Duration::from_millis(3000)
+        );
+    }
+
+    #[test]
+    fn test_buffer_pop_front() {
+        let mut buffer = Buffer::with_capacity(3);
+
+        assert!(buffer.pop_front().is_none());
+
+        let msg1 = create_message(1000);
+        let msg2 = create_message(2000);
+
+        buffer.try_push(msg1.clone()).unwrap();
+        buffer.try_push(msg2.clone()).unwrap();
+
+        let popped = buffer.pop_front().unwrap();
+        assert_eq!(popped.timestamp(), Duration::from_millis(1000));
+        assert_eq!(buffer.len(), 1);
+
+        let popped = buffer.pop_front().unwrap();
+        assert_eq!(popped.timestamp(), Duration::from_millis(2000));
+        assert_eq!(buffer.len(), 0);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_buffer_drop_before_empty() {
+        let mut buffer: Buffer<TestMessage> = Buffer::with_capacity(3);
+        let dropped = buffer.drop_before(Duration::from_millis(1000));
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn test_buffer_drop_before_single_message() {
+        let mut buffer = Buffer::with_capacity(3);
+        let msg = create_message(1000);
+        buffer.try_push(msg).unwrap();
+
+        let dropped = buffer.drop_before(Duration::from_millis(1500));
+        assert_eq!(dropped, 1);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_buffer_drop_before_multiple_messages() {
+        let mut buffer = Buffer::with_capacity(5);
+        let messages = create_messages(&[1000, 1500, 2000, 2500, 3000]);
+
+        for msg in messages {
+            buffer.try_push(msg).unwrap();
+        }
+
+        let dropped = buffer.drop_before(Duration::from_millis(2200));
+        assert_eq!(dropped, 3);
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(
+            buffer.front().unwrap().timestamp(),
+            Duration::from_millis(2500)
+        );
+    }
+
+    #[test]
+    fn test_buffer_try_push_valid_timestamp() {
+        let mut buffer = Buffer::with_capacity(3);
+
+        let msg1 = create_message(1000);
+        let result = buffer.try_push(msg1);
+        assert!(result.is_ok());
+        assert_eq!(buffer.len(), 1);
+
+        let msg2 = create_message(2000);
+        let result = buffer.try_push(msg2);
+        assert!(result.is_ok());
+        assert_eq!(buffer.len(), 2);
+    }
+
+    #[test]
+    fn test_buffer_try_push_out_of_order_rejection() {
+        let mut buffer = Buffer::with_capacity(3);
+
+        let msg1 = create_message(2000);
+        buffer.try_push(msg1).unwrap();
+
+        let msg2 = create_message(1000);
+        let result = buffer.try_push(msg2);
+        assert!(result.is_err());
+        assert_eq!(buffer.len(), 1);
+    }
+
+    #[test]
+    fn test_buffer_allows_unlimited_growth() {
+        let mut buffer = Buffer::with_capacity(2);
+
+        let msg1 = create_message(1000);
+        let msg2 = create_message(2000);
+        let msg3 = create_message(3000);
+
+        assert!(buffer.try_push(msg1).is_ok());
+        assert!(buffer.try_push(msg2).is_ok());
+
+        // Buffer doesn't enforce capacity in try_push - allows unlimited growth
+        let result = buffer.try_push(msg3);
+        assert!(result.is_ok());
+        assert_eq!(buffer.len(), 3);
+    }
+}

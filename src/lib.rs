@@ -57,9 +57,9 @@
 //! # }
 //! ```
 
-mod buffer;
+pub mod buffer;
 mod config;
-mod state;
+pub mod state;
 mod sync;
 mod types;
 mod utils;

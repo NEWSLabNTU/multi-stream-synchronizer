@@ -233,3 +233,233 @@ where
         buffer.try_push(item)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::Buffer;
+    use indexmap::IndexMap;
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestMessage {
+        timestamp: Duration,
+        data: String,
+    }
+
+    impl TestMessage {
+        fn new(timestamp_ms: u64, data: &str) -> Self {
+            Self {
+                timestamp: Duration::from_millis(timestamp_ms),
+                data: data.to_string(),
+            }
+        }
+    }
+
+    impl WithTimestamp for TestMessage {
+        fn timestamp(&self) -> Duration {
+            self.timestamp
+        }
+    }
+
+    fn create_message(timestamp_ms: u64) -> TestMessage {
+        TestMessage::new(timestamp_ms, &format!("msg_{}", timestamp_ms))
+    }
+
+    fn create_test_state(buf_size: usize, window_size_ms: u64) -> State<&'static str, TestMessage> {
+        let mut buffers = IndexMap::new();
+        buffers.insert("A", Buffer::with_capacity(buf_size));
+        buffers.insert("B", Buffer::with_capacity(buf_size));
+
+        State {
+            buffers,
+            commit_ts: Some(Duration::from_millis(1000)),
+            buf_size,
+            window_size: Duration::from_millis(window_size_ms),
+            feedback_tx: None,
+        }
+    }
+
+    #[test]
+    fn test_state_is_ready_all_empty() {
+        let state = create_test_state(4, 100);
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn test_state_is_ready_some_buffers_insufficient() {
+        let mut state = create_test_state(4, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        assert!(!state.is_ready());
+
+        state.push("B", create_message(1500)).unwrap();
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn test_state_is_ready_all_buffers_sufficient() {
+        let mut state = create_test_state(4, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        state.push("A", create_message(1600)).unwrap();
+        state.push("B", create_message(1510)).unwrap();
+        state.push("B", create_message(1610)).unwrap();
+
+        assert!(state.is_ready());
+    }
+
+    #[test]
+    fn test_state_is_full_no_buffers_full() {
+        let mut state = create_test_state(3, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        state.push("B", create_message(1500)).unwrap();
+
+        assert!(!state.is_full());
+    }
+
+    #[test]
+    fn test_state_is_full_all_buffers_full() {
+        let mut state = create_test_state(2, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        state.push("A", create_message(1600)).unwrap();
+        state.push("B", create_message(1500)).unwrap();
+        state.push("B", create_message(1600)).unwrap();
+
+        assert!(state.is_full());
+    }
+
+    #[test]
+    fn test_state_is_empty_all_empty() {
+        let state = create_test_state(4, 100);
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_state_is_empty_some_have_data() {
+        let mut state = create_test_state(4, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        assert!(state.is_empty()); // Returns true because buffer B is empty
+    }
+
+    #[test]
+    fn test_state_is_empty_none_empty() {
+        let mut state = create_test_state(4, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        state.push("B", create_message(1500)).unwrap();
+
+        assert!(!state.is_empty());
+    }
+
+    #[test]
+    fn test_state_all_one_false_when_empty() {
+        let state = create_test_state(4, 100);
+        assert!(!state.all_one());
+    }
+
+    #[test]
+    fn test_state_all_one_true_when_all_have_one() {
+        let mut state = create_test_state(4, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        state.push("B", create_message(1500)).unwrap();
+
+        assert!(state.all_one());
+    }
+
+    #[test]
+    fn test_state_inf_timestamp_empty_buffers() {
+        let state = create_test_state(4, 100);
+        assert!(state.inf_timestamp().is_none());
+    }
+
+    #[test]
+    fn test_state_inf_timestamp_single_message_per_buffer() {
+        let mut state = create_test_state(4, 100);
+
+        state.push("A", create_message(1200)).unwrap();
+        state.push("B", create_message(1500)).unwrap();
+
+        let (key, ts) = state.inf_timestamp().unwrap();
+        assert_eq!(key, "B"); // Maximum of minimums
+        assert_eq!(ts, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn test_state_sup_timestamp_empty_buffers() {
+        let state = create_test_state(4, 100);
+        assert!(state.sup_timestamp().is_none());
+    }
+
+    #[test]
+    fn test_state_min_timestamp_empty_buffers() {
+        let state = create_test_state(4, 100);
+        assert!(state.min_timestamp().is_none());
+    }
+
+    #[test]
+    fn test_state_push_valid_insertion() {
+        let mut state = create_test_state(4, 100);
+
+        let result = state.push("A", create_message(1500));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_state_push_late_message_rejection() {
+        let mut state = create_test_state(4, 100);
+
+        let result = state.push("A", create_message(500));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_state_push_buffer_not_found() {
+        let mut state = create_test_state(4, 100);
+
+        let result = state.push("C", create_message(1500));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_state_drop_min_no_messages() {
+        let mut state = create_test_state(4, 100);
+
+        let dropped = state.drop_min();
+        assert!(!dropped);
+    }
+
+    #[test]
+    fn test_state_drop_min_multiple_buffers() {
+        let mut state = create_test_state(4, 100);
+
+        state.push("A", create_message(1500)).unwrap();
+        state.push("A", create_message(2000)).unwrap();
+        state.push("B", create_message(1100)).unwrap();
+        state.push("B", create_message(2500)).unwrap();
+
+        let dropped = state.drop_min();
+        assert!(dropped);
+
+        let (_, min_ts) = state.min_timestamp().unwrap();
+        assert_eq!(min_ts, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn test_state_try_match_no_match_possible() {
+        let mut state = create_test_state(4, 100);
+
+        // Messages too far apart
+        state.push("A", create_message(2000)).unwrap();
+        state.push("A", create_message(2600)).unwrap();
+        state.push("B", create_message(2500)).unwrap();
+        state.push("B", create_message(2700)).unwrap();
+
+        let result = state.try_match();
+        assert!(result.is_none());
+    }
+}

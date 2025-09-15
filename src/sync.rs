@@ -262,3 +262,98 @@ where
 
     Ready(group)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Config, WithTimestamp};
+    use futures::stream;
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestMessage {
+        pub timestamp: Duration,
+        pub data: String,
+    }
+
+    impl WithTimestamp for TestMessage {
+        fn timestamp(&self) -> Duration {
+            self.timestamp
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_valid_configuration() {
+        let config = Config {
+            window_size: Duration::from_millis(100),
+            start_time: None,
+            buf_size: 4,
+        };
+
+        let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
+        let keys = ["A", "B"];
+
+        let result = sync(empty_stream, keys, config);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_config_buf_size_too_small() {
+        let config = Config {
+            window_size: Duration::from_millis(100),
+            start_time: None,
+            buf_size: 1,
+        };
+
+        let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
+        let keys = ["A", "B"];
+
+        let result = sync(empty_stream, keys, config);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_config_window_size_zero() {
+        let config = Config {
+            window_size: Duration::ZERO,
+            start_time: None,
+            buf_size: 4,
+        };
+
+        let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
+        let keys = ["A", "B"];
+
+        let result = sync(empty_stream, keys, config);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_config_empty_key_list() {
+        let config = Config {
+            window_size: Duration::from_millis(100),
+            start_time: None,
+            buf_size: 4,
+        };
+
+        let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
+        let keys: Vec<&str> = vec![];
+
+        let result = sync(empty_stream, keys, config);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_config_minimum_valid_values() {
+        let config = Config {
+            window_size: Duration::from_nanos(1), // Minimum valid window
+            start_time: None,
+            buf_size: 2, // Minimum valid buffer size
+        };
+
+        let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
+        let keys = ["A"];
+
+        let result = sync(empty_stream, keys, config);
+        assert!(result.is_ok());
+    }
+}
