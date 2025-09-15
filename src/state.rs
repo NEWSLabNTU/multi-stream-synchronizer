@@ -216,6 +216,15 @@ where
         true
     }
 
+    /// Drop expired messages from all buffers based on reference timestamp.
+    /// Returns the total number of dropped messages.
+    pub fn drop_expired_messages(&mut self, reference_timestamp: Duration) -> usize {
+        self.buffers
+            .values_mut()
+            .map(|buffer| buffer.drop_expired(reference_timestamp))
+            .sum()
+    }
+
     /// Insert a message to the queue identified by the key. It
     /// returns true if the message is successfully inserted.
     pub fn push(&mut self, key: K, item: T) -> Result<(), T> {
@@ -461,5 +470,111 @@ mod tests {
 
         let result = state.try_match();
         assert!(result.is_none());
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestMessageWithTimeout {
+        timestamp: Duration,
+        data: String,
+        timeout: Option<Duration>,
+    }
+
+    impl TestMessageWithTimeout {
+        fn new(timestamp_ms: u64, data: &str, timeout_ms: Option<u64>) -> Self {
+            Self {
+                timestamp: Duration::from_millis(timestamp_ms),
+                data: data.to_string(),
+                timeout: timeout_ms.map(Duration::from_millis),
+            }
+        }
+    }
+
+    impl WithTimestamp for TestMessageWithTimeout {
+        fn timestamp(&self) -> Duration {
+            self.timestamp
+        }
+
+        fn timeout(&self) -> Option<Duration> {
+            self.timeout
+        }
+    }
+
+    fn create_test_state_with_timeout(
+        buf_size: usize,
+        window_size_ms: u64,
+    ) -> State<&'static str, TestMessageWithTimeout> {
+        let mut buffers = IndexMap::new();
+        buffers.insert("A", Buffer::with_capacity(buf_size));
+        buffers.insert("B", Buffer::with_capacity(buf_size));
+
+        State {
+            buffers,
+            commit_ts: Some(Duration::from_millis(1000)),
+            buf_size,
+            window_size: Duration::from_millis(window_size_ms),
+            feedback_tx: None,
+        }
+    }
+
+    #[test]
+    fn test_state_drop_expired_messages_no_timeout() {
+        let mut state = create_test_state_with_timeout(4, 100);
+
+        // Add messages without timeout
+        let msg1 = TestMessageWithTimeout::new(1500, "msg1", None);
+        let msg2 = TestMessageWithTimeout::new(1600, "msg2", None);
+        state.push("A", msg1).unwrap();
+        state.push("B", msg2).unwrap();
+
+        let dropped = state.drop_expired_messages(Duration::from_millis(3000));
+        assert_eq!(dropped, 0);
+        assert_eq!(state.buffers["A"].len(), 1);
+        assert_eq!(state.buffers["B"].len(), 1);
+    }
+
+    #[test]
+    fn test_state_drop_expired_messages_with_timeout() {
+        let mut state = create_test_state_with_timeout(4, 100);
+
+        // Add messages with different timeouts
+        let msg1 = TestMessageWithTimeout::new(1500, "msg1", Some(500)); // expires at 2000ms
+        let msg2 = TestMessageWithTimeout::new(1600, "msg2", Some(1000)); // expires at 2600ms
+        let msg3 = TestMessageWithTimeout::new(1700, "msg3", Some(2000)); // expires at 3700ms
+
+        state.push("A", msg1).unwrap();
+        state.push("A", msg3).unwrap();
+        state.push("B", msg2).unwrap();
+
+        // Reference time 2500ms should expire only msg1 (expires at 2000ms)
+        // msg2 expires at 2600ms, so it should still be alive
+        let dropped = state.drop_expired_messages(Duration::from_millis(2500));
+        assert_eq!(dropped, 1); // Only msg1 expired
+        assert_eq!(state.buffers["A"].len(), 1); // msg3 remains
+        assert_eq!(state.buffers["B"].len(), 1); // msg2 still alive
+
+        // Verify remaining message
+        assert_eq!(
+            state.buffers["A"].front().unwrap().timestamp(),
+            Duration::from_millis(1700)
+        );
+    }
+
+    #[test]
+    fn test_state_drop_expired_messages_mixed() {
+        let mut state = create_test_state_with_timeout(4, 100);
+
+        // Mix of timeout and no-timeout messages
+        let msg1 = TestMessageWithTimeout::new(1500, "msg1", Some(300)); // expires at 1800ms
+        let msg2 = TestMessageWithTimeout::new(1600, "msg2", None); // no timeout
+        let msg3 = TestMessageWithTimeout::new(1700, "msg3", Some(1000)); // expires at 2700ms
+        state.push("A", msg1).unwrap();
+        state.push("A", msg2).unwrap();
+        state.push("B", msg3).unwrap();
+
+        // Reference time 2000ms should expire only msg1
+        let dropped = state.drop_expired_messages(Duration::from_millis(2000));
+        assert_eq!(dropped, 1);
+        assert_eq!(state.buffers["A"].len(), 1); // msg2 remains (no timeout)
+        assert_eq!(state.buffers["B"].len(), 1); // msg3 remains (not yet expired)
     }
 }

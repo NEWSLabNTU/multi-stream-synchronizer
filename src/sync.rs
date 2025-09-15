@@ -104,6 +104,11 @@ where
         // println!("......\n{state:#?}\n......");
         // Loop until a valid group is found.
         loop {
+            // Clean up expired messages using the latest commit timestamp as reference
+            if let Some(commit_ts) = state.commit_ts {
+                let _expired_count = state.drop_expired_messages(commit_ts);
+            }
+
             // println!("......\n{state:#?}\n......");
             if !state.is_ready() {
                 // eprintln!("not ready");
@@ -249,6 +254,11 @@ where
         // Case: the input stream is depleted.
         // Loop until a valid group is found.
         loop {
+            // Clean up expired messages using the latest commit timestamp as reference
+            if let Some(commit_ts) = state.commit_ts {
+                let _expired_count = state.drop_expired_messages(commit_ts);
+            }
+
             if state.is_empty() {
                 break None;
             } else if let Some(matching) = state.try_match() {

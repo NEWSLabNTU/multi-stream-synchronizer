@@ -7,6 +7,12 @@ use tokio::sync::watch;
 /// Creates a timestamp from the message passed to the synchronizer.
 pub trait WithTimestamp: Send {
     fn timestamp(&self) -> Duration;
+
+    /// Optional timeout for how long the message can stay in buffer.
+    /// Returns None for no timeout (default behavior).
+    fn timeout(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// The key that identifies the queue in the synchronizer.
