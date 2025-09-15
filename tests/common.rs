@@ -60,6 +60,7 @@ where
         Self::default()
     }
 
+    #[allow(dead_code)]
     pub fn add_message(mut self, key: K, timestamp_ms: u64) -> Self {
         self.messages.push((key, create_message(timestamp_ms)));
         self
