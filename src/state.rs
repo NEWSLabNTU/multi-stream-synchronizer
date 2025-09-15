@@ -93,10 +93,8 @@ where
             // Make sure (sup - inf >= window_size). If not, it needs to
             // wait for more messages.
             let (_, sup_ts) = self.sup_timestamp()?;
-            if !self.all_one() {
-                if inf_ts + self.window_size > sup_ts {
-                    return None;
-                }
+            if !self.all_one() && inf_ts + self.window_size > sup_ts {
+                return None;
             }
 
             let window_start = inf_ts.saturating_sub(self.window_size);
