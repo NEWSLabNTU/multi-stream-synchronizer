@@ -3,6 +3,24 @@ name = "multi-stream-synchronizer"
 version = "0.1.0"
 authors = ["jerry73204 <jerry73204@gmail.com>"]
 edition = "2021"
+description = "A Rust library for synchronizing timestamped messages from multiple data streams using time-window based grouping"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/jerry73204/multi-stream-synchronizer"
+repository = "https://github.com/jerry73204/multi-stream-synchronizer"
+documentation = "https://docs.rs/multi-stream-synchronizer"
+keywords = ["synchronization", "streams", "real-time", "time-window", "sensor-fusion"]
+categories = ["algorithms", "asynchronous", "data-structures"]
+include = [
+    "src/**/*",
+    "tests/**/*",
+    "Cargo.toml",
+    "README.md",
+    "ALGORITHM.md",
+    "CONTRIBUTING.md",
+    "license/LICENSE-MIT",
+    "license/LICENSE-APACHE"
+]
 
 [features]
 default = []
