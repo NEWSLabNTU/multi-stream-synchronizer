@@ -7,7 +7,7 @@ use multi_stream_synchronizer::{sync, Config, WithTimestamp};
 use std::time::Duration;
 
 // Define your message type
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MyMessage(Duration);
 
 impl WithTimestamp for MyMessage {
@@ -44,6 +44,7 @@ async fn main() -> eyre::Result<()> {
         window_size: Duration::from_millis(500),
         start_time: None,
         buf_size: 16,
+        staleness_config: None,
     };
     let (sync_stream, _feedback_stream) = sync(join_stream, ["X", "Y"], config)?;
 

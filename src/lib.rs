@@ -9,13 +9,14 @@
 //!     stream::{StreamExt, TryStreamExt},
 //! };
 //! use indexmap::IndexMap;
-//! use multi_stream_synchronizer::{sync, Config, Timestamped};
+//! use multi_stream_synchronizer::{sync, Config, WithTimestamp};
 //! use std::time::Duration;
 //!
 //! // Define your message type
+//! #[derive(Clone)]
 //! struct MyMessage(Duration);
 //!
-//! impl Timestamped for MyMessage {
+//! impl WithTimestamp for MyMessage {
 //!     fn timestamp(&self) -> Duration {
 //!         self.0
 //!     }
@@ -48,6 +49,7 @@
 //!     window_size: Duration::from_millis(500),
 //!     start_time: None,
 //!     buf_size: 16,
+//!     staleness_config: None,
 //! };
 //! let (sync_stream, feedback_stream) = sync(join_stream, ["X", "Y"], config)?;
 //!
@@ -59,11 +61,13 @@
 
 pub mod buffer;
 mod config;
+pub mod staleness;
 pub mod state;
 mod sync;
 mod types;
 mod utils;
 
 pub use config::Config;
+pub use staleness::{StalenessConfig, StalenessDetector, StalenessStats};
 pub use sync::sync;
 pub use types::*;

@@ -12,11 +12,11 @@ help:
 
 .PHONY: build
 build:
-	cargo build --all-targets
+	cargo build --all-targets --all-features
 
 .PHONY: test
 test:
-	cargo nextest run --no-fail-fast
+	cargo nextest run --no-fail-fast --all-features
 
 .PHONY: check
 check:
@@ -29,7 +29,7 @@ format:
 .PHONY: lint
 lint:
 	cargo +nightly fmt --check
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 
 .PHONY: doc
 doc:

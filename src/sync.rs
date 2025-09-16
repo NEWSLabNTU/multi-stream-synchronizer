@@ -1,5 +1,6 @@
 use crate::{
     buffer::Buffer,
+    staleness::StalenessDetector,
     state::State,
     types::{FeedbackReceiver, Key, OutputStream, WithTimestamp},
     Config, Feedback,
@@ -32,7 +33,7 @@ pub fn sync<'a, K, T, S, I>(
 ) -> Result<(OutputStream<'a, K, T>, FeedbackReceiver<K>)>
 where
     K: Key + 'a,
-    T: WithTimestamp + 'a,
+    T: WithTimestamp + Clone + 'a,
     S: Stream<Item = Result<(K, T)>> + Unpin + Send + 'a,
     I: IntoIterator<Item = K>,
 {
@@ -42,6 +43,7 @@ where
         window_size,
         start_time,
         buf_size,
+        staleness_config,
     } = config;
 
     // Sanity check
@@ -69,6 +71,9 @@ where
         watch::channel(init_feedback)
     };
 
+    // Initialize staleness detector if configured
+    let staleness_detector = staleness_config.map(StalenessDetector::new);
+
     // Initialize the internal state.
     let mut state = State {
         feedback_tx: Some(feedback_tx),
@@ -76,6 +81,7 @@ where
         commit_ts: start_time,
         buf_size,
         window_size,
+        staleness_detector,
     };
 
     // Construct output stream.
@@ -97,7 +103,7 @@ fn poll<K, T, S>(
 where
     K: Key,
     S: Stream<Item = Result<(K, T)>> + Unpin + Send,
-    T: WithTimestamp + Send,
+    T: WithTimestamp + Clone + Send,
 {
     let group = if let Some(mut input_stream_mut) = input_stream.as_mut().as_pin_mut() {
         // Case: the input stream is not depleted yet.
@@ -108,6 +114,9 @@ where
             if let Some(commit_ts) = state.commit_ts {
                 let _expired_count = state.drop_expired_messages(commit_ts);
             }
+
+            // Process staleness expiration if configured
+            let _stale_count = state.process_staleness_expiration();
 
             // println!("......\n{state:#?}\n......");
             if !state.is_ready() {
@@ -298,6 +307,7 @@ mod tests {
             window_size: Duration::from_millis(100),
             start_time: None,
             buf_size: 4,
+            staleness_config: None,
         };
 
         let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
@@ -313,6 +323,7 @@ mod tests {
             window_size: Duration::from_millis(100),
             start_time: None,
             buf_size: 1,
+            staleness_config: None,
         };
 
         let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
@@ -328,6 +339,7 @@ mod tests {
             window_size: Duration::ZERO,
             start_time: None,
             buf_size: 4,
+            staleness_config: None,
         };
 
         let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
@@ -343,6 +355,7 @@ mod tests {
             window_size: Duration::from_millis(100),
             start_time: None,
             buf_size: 4,
+            staleness_config: None,
         };
 
         let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();
@@ -358,6 +371,7 @@ mod tests {
             window_size: Duration::from_nanos(1), // Minimum valid window
             start_time: None,
             buf_size: 2, // Minimum valid buffer size
+            staleness_config: None,
         };
 
         let empty_stream = stream::empty::<eyre::Result<(&str, TestMessage)>>();

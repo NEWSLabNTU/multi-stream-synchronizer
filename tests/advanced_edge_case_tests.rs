@@ -209,6 +209,7 @@ async fn test_buffer_size_edge_cases() {
         window_size: Duration::from_millis(50),
         start_time: None,
         buf_size: 2,
+        staleness_config: None,
     };
 
     let groups1 = run_sync(stream1, ["A", "B"], config1).await.unwrap();
@@ -229,6 +230,7 @@ async fn test_buffer_size_edge_cases() {
         window_size: Duration::from_millis(50),
         start_time: None,
         buf_size: 10_000,
+        staleness_config: None,
     };
 
     let groups2 = run_sync(stream2, ["A", "B"], config2).await.unwrap();
@@ -261,6 +263,7 @@ async fn test_start_time_configurations() {
         window_size: Duration::from_millis(50),
         start_time: None,
         buf_size: 16,
+        staleness_config: None,
     };
 
     let groups1 = run_sync(stream1, ["A", "B"], config1).await.unwrap();
@@ -278,6 +281,7 @@ async fn test_start_time_configurations() {
         window_size: Duration::from_millis(50),
         start_time: Some(Duration::from_millis(1500)),
         buf_size: 16,
+        staleness_config: None,
     };
 
     let groups2 = run_sync(stream2, ["A", "B"], config2).await.unwrap();

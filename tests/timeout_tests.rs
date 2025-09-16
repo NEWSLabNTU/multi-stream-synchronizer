@@ -56,6 +56,7 @@ async fn test_timeout_basic_expiration() {
         window_size: Duration::from_millis(200),
         start_time: None,
         buf_size: 4,
+        staleness_config: None,
     };
 
     let groups = run_sync_with_timeout(stream, ["A", "B"], config)
@@ -87,6 +88,7 @@ async fn test_timeout_mixed_timeout_and_no_timeout() {
         window_size: Duration::from_millis(100),
         start_time: None,
         buf_size: 4,
+        staleness_config: None,
     };
 
     let groups = run_sync_with_timeout(stream, ["A", "B"], config)
@@ -124,6 +126,7 @@ async fn test_timeout_prevents_memory_buildup() {
         window_size: Duration::from_millis(100),
         start_time: None,
         buf_size: 10,
+        staleness_config: None,
     };
 
     let groups = run_sync_with_timeout(stream, ["A", "B"], config)
@@ -154,6 +157,7 @@ async fn test_timeout_with_different_timeouts_per_stream() {
         window_size: Duration::from_millis(200),
         start_time: None,
         buf_size: 4,
+        staleness_config: None,
     };
 
     let groups = run_sync_with_timeout(stream, ["fast", "slow"], config)
@@ -184,6 +188,7 @@ async fn test_timeout_edge_case_exact_expiration() {
         window_size: Duration::from_millis(100),
         start_time: None,
         buf_size: 4,
+        staleness_config: None,
     };
 
     let groups = run_sync_with_timeout(stream, ["A", "B"], config)

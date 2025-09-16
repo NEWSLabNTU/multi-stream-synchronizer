@@ -139,6 +139,7 @@ pub fn default_config() -> Config {
         window_size: Duration::from_millis(100),
         start_time: None,
         buf_size: 16,
+        staleness_config: None,
     }
 }
 
@@ -148,6 +149,7 @@ pub fn config_with_window(window_ms: u64) -> Config {
         window_size: Duration::from_millis(window_ms),
         start_time: None,
         buf_size: 16,
+        staleness_config: None,
     }
 }
 
@@ -158,5 +160,6 @@ pub fn config_with_buffer_size(buf_size: usize) -> Config {
         window_size: Duration::from_millis(100),
         start_time: None,
         buf_size,
+        staleness_config: None,
     }
 }

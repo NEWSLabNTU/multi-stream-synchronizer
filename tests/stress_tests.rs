@@ -133,6 +133,7 @@ async fn test_large_buffer_capacity() {
         window_size: Duration::from_millis(100),
         start_time: None,
         buf_size: buffer_size,
+        staleness_config: None,
     };
 
     let start_time = Instant::now();
@@ -238,6 +239,7 @@ async fn test_rapid_state_changes() {
         window_size: Duration::from_millis(50),
         start_time: None,
         buf_size: 8, // Small buffer to force rapid state changes
+        staleness_config: None,
     };
 
     let start_time = Instant::now();
@@ -286,6 +288,7 @@ async fn test_memory_efficiency() {
             window_size: Duration::from_millis(100),
             start_time: None,
             buf_size: 100, // Reasonable buffer size
+            staleness_config: None,
         };
 
         let start_time = Instant::now();

@@ -1,5 +1,6 @@
 use crate::{
     buffer::Buffer,
+    staleness::StalenessDetector,
     types::{Feedback, Key, WithTimestamp},
 };
 use indexmap::IndexMap;
@@ -11,7 +12,7 @@ use tokio::sync::watch;
 pub struct State<K, T>
 where
     K: Key,
-    T: WithTimestamp,
+    T: WithTimestamp + Clone,
 {
     /// A list of buffers indexed by key K.
     pub buffers: IndexMap<K, Buffer<T>>,
@@ -29,12 +30,15 @@ where
 
     /// The sender where feedback messages are sent to.
     pub feedback_tx: Option<watch::Sender<Feedback<K>>>,
+
+    /// Optional staleness detector for real-time message expiration
+    pub staleness_detector: Option<StalenessDetector<K, T>>,
 }
 
 impl<K, T> State<K, T>
 where
     K: Key,
-    T: WithTimestamp,
+    T: WithTimestamp + Clone,
 {
     // pub fn print_debug_info(&self) {
     //     debug!("buffer sizes");
@@ -239,7 +243,40 @@ where
             return Err(item);
         };
 
+        // Add to staleness detector if configured
+        if let Some(ref mut staleness_detector) = self.staleness_detector {
+            // Use message timeout if available, otherwise use window_size as default staleness timeout
+            let staleness_timeout = item.timeout().unwrap_or(self.window_size);
+            staleness_detector.add_message(key.clone(), item.clone(), staleness_timeout);
+        }
+
         buffer.try_push(item)
+    }
+
+    /// Process expired messages from staleness detector and remove them from buffers
+    pub fn process_staleness_expiration(&mut self) -> usize {
+        if let Some(ref mut staleness_detector) = self.staleness_detector {
+            let expired_messages = staleness_detector.drain_expired();
+            let mut removed_count = 0;
+
+            for (key, expired_message) in expired_messages {
+                if let Some(buffer) = self.buffers.get_mut(&key) {
+                    // Since we can't remove specific messages from the middle of the buffer,
+                    // we'll remove from the front if it matches the expired message
+                    // This is a limitation of the current buffer implementation
+                    if let Some(front_msg) = buffer.front() {
+                        if front_msg.timestamp() == expired_message.timestamp() {
+                            buffer.pop_front();
+                            removed_count += 1;
+                        }
+                    }
+                }
+            }
+
+            removed_count
+        } else {
+            0
+        }
     }
 }
 
@@ -286,6 +323,7 @@ mod tests {
             buf_size,
             window_size: Duration::from_millis(window_size_ms),
             feedback_tx: None,
+            staleness_detector: None,
         }
     }
 
@@ -513,6 +551,7 @@ mod tests {
             buf_size,
             window_size: Duration::from_millis(window_size_ms),
             feedback_tx: None,
+            staleness_detector: None,
         }
     }
 
